@@ -1,0 +1,87 @@
+# RECAP Training Configuration
+# Base model fine-tuning on MetaNetX
+
+# Model
+model:
+  name: "sagawa/ReactionT5v2-forward"
+  max_length: 512
+
+# Data
+data:
+  train_file: "data/splits/train.csv"
+  val_file: "data/splits/val.csv"
+  test_file: "data/splits/test.csv"
+  
+  # Columns
+  substrates_col: "substrates"
+  products_col: "products"
+  ec_col: "ec_number"  # Optional
+  
+  # Processing
+  augment: true
+  max_samples: null  # null for all
+
+# Training
+training:
+  # Basics
+  epochs: 10
+  batch_size: 32
+  gradient_accumulation_steps: 4
+  
+  # Optimizer
+  optimizer: "adamw"
+  learning_rate: 1.0e-4
+  weight_decay: 0.01
+  
+  # Scheduler
+  scheduler: "cosine"
+  warmup_steps: 1000
+  
+  # Regularization
+  dropout: 0.1
+  label_smoothing: 0.1
+  
+  # Mixed precision
+  fp16: true
+  
+  # Gradient clipping
+  max_grad_norm: 1.0
+
+# Evaluation
+evaluation:
+  eval_steps: 500
+  num_beams: 5
+  num_return_sequences: 5
+  
+  # Metrics
+  metrics:
+    - "top1_accuracy"
+    - "top5_accuracy"
+    - "smiles_validity"
+    - "reaction_balance"
+
+# Checkpointing
+checkpointing:
+  save_steps: 1000
+  save_total_limit: 3
+  save_best: true
+  metric_for_best: "val_top1_accuracy"
+  greater_is_better: true
+
+# Logging
+logging:
+  log_steps: 100
+  wandb:
+    project: "recap"
+    entity: null  # Your wandb username
+    tags: ["fine-tuning", "metanetx"]
+
+# Hardware
+hardware:
+  device: "cuda"
+  num_workers: 4
+  pin_memory: true
+
+# Reproducibility
+seed: 42
+deterministic: true
