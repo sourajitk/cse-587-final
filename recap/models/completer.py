@@ -8,6 +8,7 @@ import torch
 from transformers import AutoTokenizer
 
 from .reaction_t5 import ReactionT5Model, ReactionT5Config
+from .kg import BiochemicalKG
 
 
 @dataclass
@@ -78,6 +79,7 @@ class ReactionCompleter:
         model: ReactionT5Model,
         tokenizer: AutoTokenizer,
         device: Optional[str] = None,
+        kg: Optional[BiochemicalKG] = None,
     ):
         """
         Initialize completer.
@@ -89,6 +91,7 @@ class ReactionCompleter:
         """
         self.model = model
         self.tokenizer = tokenizer
+        self.kg = kg
         
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -102,6 +105,7 @@ class ReactionCompleter:
         model_name: str = "recap-base",
         mode: str = "forward",
         device: Optional[str] = None,
+        kg_path: Optional[str] = None,
         **kwargs,
     ) -> "ReactionCompleter":
         """
@@ -124,13 +128,18 @@ class ReactionCompleter:
         
         # Load model and tokenizer
         # For now, use ReactionT5v2 as base
-        if model_path is None or not model_path.startswith("path/"):
+        if model_path is None or model_path.startswith("path/"):
             model_path = "sagawa/ReactionT5v2-forward" if mode == "forward" else "sagawa/ReactionT5v2-retrosynthesis"
         
         model = ReactionT5Model.from_pretrained(model_path, mode=mode, **kwargs)
         tokenizer = AutoTokenizer.from_pretrained(model_path)
         
-        return cls(model=model, tokenizer=tokenizer, device=device)
+        kg = None
+        if kg_path:
+            kg = BiochemicalKG()
+            kg.load_from_tsv(kg_path)
+            
+        return cls(model=model, tokenizer=tokenizer, device=device, kg=kg)
     
     def complete(
         self,
@@ -192,6 +201,33 @@ class ReactionCompleter:
         
         # Calculate confidence scores (placeholder - implement properly)
         scores = [1.0 / (i + 1) for i in range(len(predictions))]
+        
+        # Re-rank predictions using Knowledge Graph if available
+        if self.kg is not None:
+            # Extract actual SMILES part from input_str (e.g., 'REACTANT:A.B' -> 'A.B')
+            input_smiles = input_str.split(':', 1)[-1].strip()
+            # Remove EC number if present (e.g., 'EC:1.2.3.4 REACTANT:A.B' -> 'REACTANT:A.B')
+            if ' ' in input_smiles and input_smiles.startswith('EC:'):
+                input_smiles = input_smiles.split(' ', 1)[1]
+                if ':' in input_smiles:
+                    input_smiles = input_smiles.split(':', 1)[-1].strip()
+            
+            input_mols = self._parse_molecules(input_smiles)
+            
+            for i, pred in enumerate(predictions):
+                pred_mols = self._parse_molecules(pred)
+                if mode == "forward":
+                    boost = self.kg.check_plausibility(input_mols, pred_mols)
+                elif mode == "retro":
+                    boost = self.kg.check_plausibility(pred_mols, input_mols)
+                else:
+                    boost = 0.0
+                scores[i] += boost
+                
+            # Sort by new scores
+            sorted_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
+            predictions = [predictions[i] for i in sorted_indices]
+            scores = [scores[i] for i in sorted_indices]
         
         # Parse result
         result = self._parse_result(

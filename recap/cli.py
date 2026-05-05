@@ -59,6 +59,11 @@ def main():
     default="text",
     help="Output format",
 )
+@click.option(
+    "--use-kg",
+    type=click.Path(exists=True),
+    help="Path to TSV graph file to use for inference",
+)
 def complete(
     substrates: Optional[str],
     products: Optional[str],
@@ -68,12 +73,13 @@ def complete(
     model: str,
     num_predictions: int,
     output: str,
+    use_kg: Optional[str],
 ):
     """Complete a biochemical reaction."""
     from recap import ReactionCompleter
     
     with console.status("[bold green]Loading model..."):
-        completer = ReactionCompleter.from_pretrained(model, mode=mode)
+        completer = ReactionCompleter.from_pretrained(model, mode=mode, kg_path=use_kg)
     
     # Parse inputs
     substrates_list = substrates.split(".") if substrates else None
