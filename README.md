@@ -1,89 +1,408 @@
-# ReactionT5
-## Attention: This repository is the old version of [ReactionT5v2](https://github.com/sagawatatsuya/ReactionT5v2). Please use the new version for better performance and more features.
-ReactionT5 is a T5 model pretrained on a large amount of chemical reactions in the [Open Reaction Database (ORD)](https://github.com/open-reaction-database/ord-data). Unlike other models for chemical reaction prediction that are trained on small and potentially biased datasets (e.g. patent datasets or high-throughput reaction datasets created by a single reaction), ReactionT5 leverages the vast and diverse dataset provided by ORD to ensure greater generalizability and performance. This allows ReactionT5 to predict both the products and yields of unseen chemical reactions with high accuracy, making it highly practical for real-world applications.
+# RECAP: Reaction Completion for Enzymatic Pathways
 
-![model image](https://github.com/sagawatatsuya/ReactionT5/blob/main/model-image.png)
+Fine-tuned ReactionT5v2 models for enzymatic reaction product prediction on MetaNetX.
 
+## Models
 
-In this repository, we will show how to use ReactionT5 for product prediction and yield prediction on your own datasets. The pretrained models, datasets, and demo is available at [Hugging Face Hub](https://huggingface.co/sagawa).
+| Model | Path | Description |
+|-------|------|-------------|
+| **Baseline** | `sagawa/ReactionT5v2-forward` | Pre-trained ReactionT5v2 |
+| **Finetuned** | `./metanetx_forward_finetuned/checkpoint-153690` | MetaNetX fine-tuned |
+| **KG-Simple** | `./metanetx_forward_kg_simple/checkpoint-127530-fixed` | + KG embeddings |
+| **LongT5** | `./metanetx_longt5_finetuned/best_model` | LongT5-TGlobal |
 
+## Setup
 
-# Installation
-Reaction T5 is based on the transformers library. In addition, RDKit is used for validity check of predicted products. To install these and other necessary libraries, use the following commands:
-```
-pip install rdkit
-pip install torch
-pip install tokenizers==0.12.1
-pip install transformers==4.21.0
-pip install datasets
-pip install sentencepiece==0.1.96
-```
+### Environment
 
-
-# Use ReactionT5
-You can use ReactionT5 to predict the products and yields of chemical reactions.
-
-### Product prediction
-To predict the products of reactions from their inputs, use the following command. The code expects 'input_data' as a string or CSV file that contains an 'input' column. The format of the string or contents of the column should follow this template: "REACTANT:{SMILES of reactants}REAGENT:{SMILES of reagents, catalysts, or solvents}". If there are no catalyst, reagent, or solvents, fill the blank with a space. And if there are multiple compounds, concatenate them with ".".(ex. "REACTANT:COC(=O)C1=CCCN(C)C1.O.\[Al+3].\[H-].\[Li+].\[Na+].\[OH-]REAGENT:C1CCOC1")
-```
-cd forward_reaction_prediction/
-python prediction.py \
-    --input_data="../data/forward_reaction_prediction_demo_input.csv" \
-    --num_beams=5 \
-    --num_return_sequences=5 \
-    --batch_size=16 \
-    --output_dir="./"
+```bash
+conda create -n reactiont5_env python=3.10
+conda activate reactiont5_env
+pip install torch transformers datasets pandas numpy rdkit tqdm matplotlib seaborn
 ```
 
-### Yield prediction
-To predict the yields of reactions from their inputs, use the following command. The code expects 'input_data' as a string or CSV file that contains an 'input' column. The format of the string or contents of the column should follow this template: "REACTANT:{SMILES of reactants}REAGENT:{SMILES of reagents, catalysts, or solvents}PRODUCT:{SMILES of products}". If there are multiple compounds, concatenate them with ".".(ex. "REACTANT:CC(C)n1ncnc1-c1cn2c(n1)-c1cnc(O)cc1OCC2.CCN(C(C)C)C(C)C.Cl.NC(=O)\[C@@H]1C\[C@H](F)CN1REAGENT: PRODUCT:O=C(NNC(=O)C(F)(F)F)C(F)(F)F")
-When running the command for the first time, you should include the 'download_pretrained_model' argument.
+### Directory Structure
+
 ```
-cd yield_prediction/
-python prediction.py \
-    --data="../data/yield_prediction_demo_input.csv" \
-    --batch_size=10 \
-    --output_dir="./" \
-    --download_pretrained_model
+/storage/group/cdm8/default/Somtirtha/
+├── ReactionT5v2/
+│   ├── reactiont5v2_forward_pretrained/
+│   └── task_forward/
+│       ├── finetune.py
+│       ├── weight_transfer.py
+│       ├── fg_tokenizer.py
+│       ├── fgkg_builder.py
+│       ├── kg_embeddings.py
+│       ├── kg_conditioned_model.py
+│       ├── run_and_evaluate_all.py
+│       ├── fgkg.pkl
+│       ├── kg_embeddings/
+│       ├── metanetx_forward_finetuned/
+│       ├── metanetx_forward_kg_simple/
+│       ├── metanetx_longt5_finetuned/
+│       └── results/
+├── longt5_from_reactiont5/
+├── metanetx/
+│   └── metanetx_processed/
+│       ├── metanetx_train_clean.csv
+│       ├── metanetx_val_clean.csv
+│       └── metanetx_test_clean.csv
+└── miniconda3/envs/reactiont5_env/
 ```
 
+---
 
-# Fine-tuning
-If your dataset is very specific and different from ORD's data, ReactionT5 may not predict well. In that case, you can conduct fine-tuning of ReactionT5 on your dataset. From our study, ReactionT5's performance drastically improved its performance by fine-tuning using relatively small data (200 reactions).
+## 1. Fine-tune ReactionT5v2
 
-### Product prediction
-Specify your training and validation data used for fine-tuning and run the following command. We expect these data to contain columns named 'REACTANT', 'REAGENT', and 'PRODUCT'; each has SMILES information. If there is no reagent information, fill in the blank with ' '.
-```
-cd forward_reaction_prediction/
-pip install sacrebleu
-python finetune-pretrained-ReactionT5.py \
-    --epochs=50 \
-    --batch_size=32 \
-    --train_data_path='your_train.csv' \
-    --valid_data_path='your_validation.csv'
+### Script: `submit_finetune.sh`
+
+```bash
+#!/bin/bash
+#SBATCH --job-name=reactiont5_mnx
+#SBATCH --partition=standard
+#SBATCH --account=cdm8_cr_default
+#SBATCH --nodelist=p-ic-4012
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=48GB
+#SBATCH --gres=gpu:1
+#SBATCH --time=48:00:00
+#SBATCH --output=/storage/group/cdm8/default/Somtirtha/ReactionT5v2/task_forward/reactiont5_mnx_%j.log
+#SBATCH --error=/storage/group/cdm8/default/Somtirtha/ReactionT5v2/task_forward/reactiont5_mnx_%j.err
+
+PYTHON=/storage/group/cdm8/default/Somtirtha/miniconda3/envs/reactiont5_env/bin/python
+
+export PYTHONUNBUFFERED=1
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export HF_HOME=/storage/group/cdm8/default/Somtirtha/hf_cache
+export TRANSFORMERS_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+export WANDB_DISABLED=true
+export TOKENIZERS_PARALLELISM=false
+
+cd /storage/group/cdm8/default/Somtirtha/ReactionT5v2/task_forward
+
+$PYTHON -u finetune.py \
+  --model_name_or_path='/storage/group/cdm8/default/Somtirtha/ReactionT5v2/reactiont5v2_forward_pretrained' \
+  --epochs=50 \
+  --lr=2e-5 \
+  --batch_size=2 \
+  --input_max_length=400 \
+  --target_max_length=300 \
+  --train_data_path='../../metanetx/metanetx_processed/metanetx_train_clean.csv' \
+  --valid_data_path='../../metanetx/metanetx_processed/metanetx_val_clean.csv' \
+  --output_dir='metanetx_forward_finetuned' \
+  --evaluation_strategy='epoch' \
+  --save_strategy='epoch' \
+  --logging_strategy='epoch'
 ```
 
-### Yield prediction
-Specify your training and validation data used for fine-tuning and run the following command. We expect these data to contain columns named 'REACTANT', 'REAGENT', 'PRODUCT', and 'YIELD'; except 'YIELD ' have SMILES information, and 'YIELD' has numerical information. If there is no reagent information, fill in the blank with ' '.
-```
-python finetuning.py \
-    --epochs=200 \
-    --batch_size=6 \
-    --train_data_path='your_train.csv' \
-    --valid_data_path='your_validation.csv' \
-    --download_pretrained_model \
-    --output_dir='output/'
+---
+
+## 2. LongT5 (Weight Transfer + Fine-tune)
+
+### Weight Transfer
+
+`weight_transfer.py` transfers ReactionT5v2 → LongT5-TGlobal:
+
+- Matches ReactionT5 config (vocab=268, d_model=768, d_kv=64, d_ff=2048)
+- Enables gated FFN (`is_gated_act=True`)
+- Remaps `LocalSelfAttention ← SelfAttention`
+- TGlobal: `local_radius=127`, `global_block_size=16`
+
+```bash
+python weight_transfer.py
+# Output: /storage/group/cdm8/default/Somtirtha/longt5_from_reactiont5/
 ```
 
-## Citation
-arxiv link: https://arxiv.org/abs/2311.06708
+### Script: `submit_longt5.sh`
+
+```bash
+#!/bin/bash
+#SBATCH --job-name=longt5_mnx
+#SBATCH --partition=standard
+#SBATCH --account=cdm8_cr_default
+#SBATCH --nodelist=p-ic-4012
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=48GB
+#SBATCH --gres=gpu:1
+#SBATCH --time=72:00:00
+#SBATCH --output=/storage/group/cdm8/default/Somtirtha/ReactionT5v2/task_forward/longt5_mnx_%j.log
+#SBATCH --error=/storage/group/cdm8/default/Somtirtha/ReactionT5v2/task_forward/longt5_mnx_%j.err
+
+PYTHON=/storage/group/cdm8/default/Somtirtha/miniconda3/envs/reactiont5_env/bin/python
+
+export PYTHONUNBUFFERED=1
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export HF_HOME=/storage/group/cdm8/default/Somtirtha/hf_cache
+export WANDB_DISABLED=true
+export TOKENIZERS_PARALLELISM=false
+
+cd /storage/group/cdm8/default/Somtirtha/ReactionT5v2/task_forward
+
+$PYTHON -u finetune.py \
+  --model_name_or_path='/storage/group/cdm8/default/Somtirtha/longt5_from_reactiont5' \
+  --epochs=50 \
+  --lr=2e-5 \
+  --batch_size=2 \
+  --input_max_length=1024 \
+  --target_max_length=512 \
+  --disable_tqdm \
+  --train_data_path='../../metanetx/metanetx_processed/metanetx_train_clean.csv' \
+  --valid_data_path='../../metanetx/metanetx_processed/metanetx_val_clean.csv' \
+  --output_dir='metanetx_longt5_finetuned' \
+  --evaluation_strategy='epoch' \
+  --save_strategy='epoch' \
+  --logging_strategy='epoch'
 ```
-@misc{sagawa2023reactiont5,  
-      title={ReactionT5: a large-scale pre-trained model towards application of limited reaction data}, 
-      author={Tatsuya Sagawa and Ryosuke Kojima},  
-      year={2023},  
-      eprint={2311.06708},  
-      archivePrefix={arXiv},  
-      primaryClass={physics.chem-ph}  
-}
+
+---
+
+## 3. FG-KG Conditioned Model
+
+### Architecture
+
 ```
+Substrates ──► fg_tokenizer.extract_fg_from_reaction()
+                      │
+                      ▼
+            FGKG (transforms_to, co_consumed, co_formed)
+                      │
+                      ▼
+            TransE Embeddings (128-d, margin loss)
+                      │
+                      ▼
+┌─────────────────────────────────────────────────────────┐
+│  ReactionT5v2 Encoder → Decoder + KGCrossAttention     │
+│  (Q: decoder_hidden, K/V: kg_embeddings, 2 layers)     │
+└─────────────────────────────────────────────────────────┘
+                      │
+                      ▼
+                 LM Head → Products
+```
+
+### Script: `run_finetune_kg.sh`
+
+```bash
+#!/bin/bash
+#SBATCH --job-name=kg_mnx
+#SBATCH --partition=standard
+#SBATCH --account=cdm8_cr_default
+#SBATCH --nodelist=p-ic-4012
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=48GB
+#SBATCH --gres=gpu:1
+#SBATCH --time=72:00:00
+#SBATCH --output=/storage/group/cdm8/default/Somtirtha/ReactionT5v2/task_forward/kg_mnx_%j.log
+#SBATCH --error=/storage/group/cdm8/default/Somtirtha/ReactionT5v2/task_forward/kg_mnx_%j.err
+
+PYTHON=/storage/group/cdm8/default/Somtirtha/miniconda3/envs/reactiont5_env/bin/python
+
+export PYTHONUNBUFFERED=1
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export HF_HOME=/storage/group/cdm8/default/Somtirtha/hf_cache
+export TRANSFORMERS_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+export WANDB_DISABLED=true
+export TOKENIZERS_PARALLELISM=false
+
+cd /storage/group/cdm8/default/Somtirtha/ReactionT5v2/task_forward
+
+# Step 1: Build FGKG
+if [ ! -f "fgkg.pkl" ]; then
+    $PYTHON -u fgkg_builder.py \
+        -i '../../metanetx/metanetx_processed/metanetx_train_clean.csv' \
+        -o 'fgkg.pkl' \
+        --substrate-col 'substrates' \
+        --product-col 'products'
+fi
+
+# Step 2: Train TransE embeddings
+if [ ! -d "kg_embeddings" ]; then
+    $PYTHON -u kg_embeddings.py \
+        --fgkg 'fgkg.pkl' \
+        -o 'kg_embeddings' \
+        --dim 128 \
+        --epochs 100 \
+        --min-count 2
+fi
+
+# Step 3: Fine-tune KG model
+$PYTHON -u finetune_kg.py \
+  --base_model='/storage/group/cdm8/default/Somtirtha/ReactionT5v2/reactiont5v2_forward_pretrained' \
+  --kg_embeddings='kg_embeddings' \
+  --epochs=40 \
+  --lr=2e-5 \
+  --batch_size=2 \
+  --n_kg_layers=2 \
+  --train_data_path='../../metanetx/metanetx_processed/metanetx_train_clean.csv' \
+  --valid_data_path='../../metanetx/metanetx_processed/metanetx_val_clean.csv' \
+  --output_dir='metanetx_forward_kg_simple'
+```
+
+---
+
+## 4. Evaluate All Models
+
+### Usage
+
+```bash
+python run_and_evaluate_all.py \
+  --input_data '../../metanetx/metanetx_processed/metanetx_test_clean.csv' \
+  --input_col 'REACTANT' \
+  --target_col 'PRODUCT' \
+  --models baseline finetuned kg_simple longt5 \
+  --num_beams 5 \
+  --batch_size 16 \
+  --output_dir './results'
+```
+
+### Arguments
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--input_data` | required | Test CSV path |
+| `--input_col` | `REACTANT` | Input column name |
+| `--target_col` | `PRODUCT` | Target column name |
+| `--models` | all 4 | Models to evaluate |
+| `--num_beams` | 5 | Beam search width |
+| `--batch_size` | 16 | Inference batch size |
+| `--output_dir` | `./results` | Output directory |
+| `--skip_prediction` | False | Skip prediction, use existing |
+| `--skip_existing` | False | Skip if predictions exist |
+| `--debug` | False | Run on first 100 samples |
+
+### Script: `submit_evaluate.sh`
+
+```bash
+#!/bin/bash
+#SBATCH --job-name=eval_mnx
+#SBATCH --partition=standard
+#SBATCH --account=cdm8_cr_default
+#SBATCH --nodelist=p-ic-4012
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=32GB
+#SBATCH --gres=gpu:1
+#SBATCH --time=8:00:00
+#SBATCH --output=/storage/group/cdm8/default/Somtirtha/ReactionT5v2/task_forward/eval_mnx_%j.log
+#SBATCH --error=/storage/group/cdm8/default/Somtirtha/ReactionT5v2/task_forward/eval_mnx_%j.err
+
+PYTHON=/storage/group/cdm8/default/Somtirtha/miniconda3/envs/reactiont5_env/bin/python
+
+export PYTHONUNBUFFERED=1
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export HF_HOME=/storage/group/cdm8/default/Somtirtha/hf_cache
+export TRANSFORMERS_OFFLINE=1
+export WANDB_DISABLED=true
+export TOKENIZERS_PARALLELISM=false
+
+cd /storage/group/cdm8/default/Somtirtha/ReactionT5v2/task_forward
+
+$PYTHON -u run_and_evaluate_all.py \
+  --input_data '../../metanetx/metanetx_processed/metanetx_test_clean.csv' \
+  --input_col 'REACTANT' \
+  --target_col 'PRODUCT' \
+  --models baseline finetuned kg_simple longt5 \
+  --num_beams 5 \
+  --batch_size 16 \
+  --output_dir './results'
+```
+
+### Outputs
+
+```
+results/
+├── comparison.csv          # Side-by-side metrics
+├── comparison.png          # Visualization
+├── baseline/
+│   ├── predictions.csv     # Raw predictions (0th, 1th, ...)
+│   ├── detailed.csv        # Per-sample metrics
+│   └── summary.csv         # Aggregate metrics
+├── finetuned/
+│   └── ...
+├── kg_simple/
+│   └── ...
+└── longt5/
+    └── ...
+```
+
+---
+
+## Run Order
+
+```bash
+# 1. Basic finetuning
+sbatch submit_finetune.sh
+
+# 2. Weight transfer (no SLURM)
+python weight_transfer.py
+
+# 3. LongT5 finetuning
+sbatch submit_longt5.sh
+
+# 4. FG-KG pipeline
+sbatch run_finetune_kg.sh
+
+# 5. Evaluate all
+sbatch submit_evaluate.sh
+```
+
+---
+
+## Metrics
+
+| Metric | Description |
+|--------|-------------|
+| All-Products | All predicted products exactly match target |
+| Any-Product | At least one product matches |
+| Primary-Product | Largest product (by heavy atoms) matches |
+| Validity | Chemically valid SMILES |
+| Tanimoto | Greedy-matched fingerprint similarity |
+| Stoichiometric Balance | Atom counts (C, H, O, N) match |
+| Top-K | Correct in top K beam results |
+| Missing | Avg target products not in prediction |
+| Hallucinated | Avg predicted products not in target |
+
+---
+
+## Results
+
+| Model | All-Prod | Any-Prod | Primary | Valid | Tanimoto | Balance | Top-5 |
+|-------|----------|----------|---------|-------|----------|---------|-------|
+| Baseline | 0.30% | 2.51% | 0.77% | 85.86% | 0.156 | 3.31% | 0.50% |
+| Finetuned | 17.30% | 58.62% | 43.30% | 81.82% | 0.634 | 12.54% | 32.14% |
+| KG-Simple | 16.79% | 58.32% | 43.06% | 81.46% | 0.631 | 12.54% | 31.88% |
+| LongT5 | 15.53% | 56.29% | 40.88% | 79.78% | 0.610 | 9.50% | 28.78% |
+
+**Key findings:**
+- Fine-tuning: 57× improvement over baseline
+- KG embeddings: negligible benefit (-0.5%)
+- LongT5: worse than standard T5 (-1.8%), shorter context sufficient
+- Stoichiometric balance: poor across all (best 12.5%)
+
+---
+
+## Files
+
+| File | Description |
+|------|-------------|
+| `finetune.py` | ReactionT5v2 / LongT5 finetuning |
+| `weight_transfer.py` | ReactionT5v2 → LongT5-TGlobal |
+| `fg_tokenizer.py` | FG detection (FARM-based) |
+| `fgkg_builder.py` | Build FGKG from reactions |
+| `kg_embeddings.py` | TransE embedding training |
+| `kg_conditioned_model.py` | ReactionT5 + KG cross-attention |
+| `run_and_evaluate_all.py` | Combined prediction + evaluation |
+
+---
+
+## License
+
+MIT
