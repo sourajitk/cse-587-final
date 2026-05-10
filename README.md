@@ -11,6 +11,8 @@ Fine-tuned ReactionT5v2 models for enzymatic reaction product prediction on Meta
 | **KG-Simple** | `./metanetx_forward_kg_simple/checkpoint-127530-fixed` | + KG embeddings |
 | **LongT5** | `./metanetx_longt5_finetuned/best_model` | LongT5-TGlobal |
 
+We trained our model using ROAR cluster. Download it [here](https://drive.google.com/file/d/1cvCBINyiZKJpNIgCTsOIlhKXA2bsSbC3/view?usp=sharing). 
+
 ## Setup
 
 ### Environment
